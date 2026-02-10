@@ -1,2 +1,52 @@
 # Sentinel
-Sentinel è un tool leggero che previene lo standby di Windows simulando una micro-attività utente impercettibile. Portatile e discreto, risiede nella system tray: basta un click per mantenere il PC attivo durante presentazioni o lunghi download. Include opzione di avvio automatico.
+
+**Sentinel** è un'applicazione leggera per Windows progettata per mantenere il computer attivo e prevenire l'attivazione automatica dello standby o dello screen saver.
+
+## 🛡️ Come funziona
+
+Sentinel opera in modo discreto nella system tray (l'area delle notifiche accanto all'orologio). Per mantenere il sistema "sveglio", il programma simula la pressione del tasto **F15** ogni 60 secondi.
+
+Il tasto F15 è un tasto funzione virtuale che non è presente sulla maggior parte delle tastiere fisiche e non è associato a nessuna funzionalità standard di Windows o delle applicazioni comuni. Questo garantisce che l'attività di Sentinel non interferisca con il tuo lavoro o con altri software in esecuzione.
+
+## 🚀 Caratteristiche
+**Sentinel** is a lightweight Windows system tray application designed to prevent your computer from going into standby or sleep mode. It works by simulating a subtle keypress (F15) periodically, ensuring your session remains active without interfering with your work.
+
+## Features
+
+- **Prevent Sleep**: Keeps your PC awake while "Active".
+- **System Tray Integration**: changing icon (Shield) or custom `sentinel.png` if available.
+- **Settings Window**: Configure options easily via a dedicated window.
+- **Scheduled Suspension**: Set a time range (e.g., 13:00 - 14:00) to automatically **pause** Sentinel (allowing sleep/screen lock during lunch breaks).
+- **Startup**: Option to run automatically when Windows starts.
+- **Low Profile**: Runs quietly in the background with minimal resource usage.
+
+## Installation
+
+1.  Download the latest release (or build from source).
+2.  Place `Sentinel.exe` (and optionally `sentinel.png` for a custom icon) in a folder of your choice.
+3.  Run `Sentinel.exe`.
+
+## Usage
+
+- **Active/Inactive**: The tool starts active. You can toggle this in the Settings window.
+- **Settings**: Double-click the tray icon (or right-click -> "Impostazioni...") to open the configuration window.
+- **Schedule**: Enable "Sospensione Programmata" in Settings to define a pause window.
+- **Exit**: Right-click the tray icon and select "Esci".
+
+## Building from Source
+
+This project is built using C# and .NET Framework 4.0 (for maximum compatibility).
+
+### Requirements
+- Windows OS with .NET Framework installed.
+
+### Build
+Simply run the included `build.bat` script.
+
+Alternatively, compile manually using `csc.exe`:
+```cmd
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:Sentinel.exe /win32icon:sentinel.ico Sentinel.cs SettingsForm.cs AssemblyInfo.cs
+```
+
+## License
+MIT License
