@@ -42,6 +42,16 @@ namespace SentinelApp
 
         [DllImport("user32.dll")]
         static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        
+        [DllImport("user32.dll")]
+        static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct LASTINPUTINFO
+        {
+            public uint cbSize;
+            public uint dwTime;
+        }
 
         private const uint ES_CONTINUOUS = 0x80000000;
         private const uint ES_SYSTEM_REQUIRED = 0x00000001;
@@ -197,7 +207,7 @@ namespace SentinelApp
 
         private void InputTimer_Tick(object sender, EventArgs e)
         {
-            // Check Schedule
+            // Check Schedule first
             if (isScheduleEnabled)
             {
                 TimeSpan now = DateTime.Now.TimeOfDay;
@@ -205,38 +215,42 @@ namespace SentinelApp
                 
                 if (scheduleStart <= scheduleEnd)
                 {
-                    // Normal range (e.g. 13:00 to 14:00)
-                    if (now >= scheduleStart && now < scheduleEnd)
-                        inPauseRange = true;
+                    // Normal range
+                    if (now >= scheduleStart && now < scheduleEnd) inPauseRange = true;
                 }
                 else
                 {
-                    // Overnight range (e.g. 23:00 to 06:00)
-                    if (now >= scheduleStart || now < scheduleEnd)
-                        inPauseRange = true;
+                    // Overnight range
+                    if (now >= scheduleStart || now < scheduleEnd) inPauseRange = true;
                 }
 
                 if (inPauseRange)
                 {
-                    // We are in the Pause window. 
-                    // Ensure the system state allows sleep (Clear ES flags)
                     SetThreadExecutionState(ES_CONTINUOUS);
-                    
-                    // Update icon text to reflect pause
                     trayIcon.Text = "Sentinel: In Pausa (Programmata)";
-                    return; // SKIP keypress
+                    return; 
                 }
             }
 
             // If not paused, check if active
             if (isAwake)
             {
-                // Ensure keep-awake flags are set (redundancy)
+                // ALWAYS set ES flags to prevent sleep (silent, no input)
+                // This is enough for Windows Sleep, but maybe not for Teams "Available" status.
                 SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
                 
-                // Simulate F15 Key Press (invisible to most apps)
-                keybd_event(VK_F15, 0, 0, UIntPtr.Zero); // Key Down
-                keybd_event(VK_F15, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); // Key Up
+                // INTELLIGENT KEYPRESS:
+                // Only press F15 if the user has been IDLE for > 55 seconds.
+                // If the user is typing/moving mouse (e.g. in Excel), LastInput was recent.
+                // We should NOT interject with F15, to avoid interference.
+                // Since user is active, Teams should already know they are active.
+                
+                if (GetIdleTimeMs() > 55000) 
+                {
+                    // User is idle for > 55s. Send blip to keep Teams active.
+                    keybd_event(VK_F15, 0, 0, UIntPtr.Zero);
+                    keybd_event(VK_F15, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                }
                 
                 trayIcon.Text = "Sentinel: Attivo";
             }
@@ -244,6 +258,15 @@ namespace SentinelApp
             {
                  trayIcon.Text = "Sentinel: Inattivo";
             }
+        }
+
+        private uint GetIdleTimeMs()
+        {
+            LASTINPUTINFO lastInput = new LASTINPUTINFO();
+            lastInput.cbSize = (uint)Marshal.SizeOf(lastInput);
+            if (!GetLastInputInfo(ref lastInput)) return 0;
+
+            return (uint)Environment.TickCount - lastInput.dwTime;
         }
 
         private void SettingsForm_ActiveChanged(object sender, EventArgs e)
