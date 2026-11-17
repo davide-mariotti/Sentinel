@@ -1,20 +1,48 @@
 using System;
 using System.Drawing;
-using System.IO;
+using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using Timer = System.Windows.Forms.Timer;
 
 namespace SentinelApp
 {
     public class Program
     {
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new SentinelContext());
+            bool first;
+            using (var single = new Mutex(true, "Local\\SentinelApp", out first))
+            {
+                if (!first)
+                {
+                    MessageBox.Show(L.T("Sentinel è già acceso: lo trovi nell'area di notifica, vicino all'orologio.",
+                                        "Sentinel is already running: look for it in the notification area, next to the clock."),
+                                    "Sentinel", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                bool fromStartup = Array.IndexOf(args, "--startup") >= 0;
+                Application.Run(new SentinelContext(fromStartup));
+            }
+        }
+    }
+
+    // Italian if Windows speaks Italian, English otherwise. That's the whole i18n framework.
+    public static class L
+    {
+        static readonly bool It = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "it";
+        public static string T(string it, string en) { return It ? it : en; }
+
+        public static Icon AppIcon(string name, Size size)
+        {
+            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                return s == null ? SystemIcons.Shield : new Icon(s, size);
         }
     }
 
@@ -23,14 +51,17 @@ namespace SentinelApp
         private NotifyIcon       trayIcon;
         private ContextMenuStrip contextMenu;
         private SettingsForm     settingsForm;
+        private Icon             iconOn, iconOff;
 
         private bool     isAwake           = true;
         private bool     isScheduleEnabled = false;
+        private bool     isLocked          = false;   // Win+L: PC stays awake, screen may turn off
         private TimeSpan scheduleStart;
         private TimeSpan scheduleEnd;
 
         private const string AppName      = "Sentinel";
         private const string RegistryPath = "SOFTWARE\\SentinelApp";
+        private const string RunPath      = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
 
         // ── Battery Monitor ───────────────────────────────────────────────────
         private bool batteryMonitorEnabled = true;
@@ -62,16 +93,19 @@ namespace SentinelApp
         private const uint ES_SYSTEM_REQUIRED  = 0x00000001;
         private const uint ES_DISPLAY_REQUIRED = 0x00000002;
         private const int  KEYEVENTF_KEYUP     = 0x0002;
-        private const byte VK_F15              = 0x7E;
+        private const byte VK_F15              = 0x7E;   // a key no keyboard has: nobody notices it
 
         private Timer inputTimer;
 
-        public SentinelContext()
+        public SentinelContext(bool fromStartup)
         {
+            iconOn  = L.AppIcon("Sentinel.ico",    SystemInformation.SmallIconSize);
+            iconOff = L.AppIcon("SentinelOff.ico", SystemInformation.SmallIconSize);
+
             trayIcon = new NotifyIcon();
-            LoadIcon();
+            trayIcon.Icon    = iconOn;
             trayIcon.Visible = true;
-            trayIcon.MouseDoubleClick += TrayIcon_MouseDoubleClick;
+            trayIcon.MouseDoubleClick += (s, e) => ShowSettings();
 
             LoadSettings();
 
@@ -90,8 +124,11 @@ namespace SentinelApp
             batteryRefreshTimer.Interval = 28000;
             batteryRefreshTimer.Tick    += BatteryRefreshTimer_Tick;
 
+            bool startup = IsStartupEnabled();
+            if (startup) SetStartup(true);   // refresh the Run entry: exe moved, or written by an older version
+
             settingsForm = new SettingsForm(
-                isAwake, IsStartupEnabled(), isScheduleEnabled, scheduleStart, scheduleEnd,
+                isAwake, startup, isScheduleEnabled, scheduleStart, scheduleEnd,
                 batteryMonitorEnabled, batteryHighThreshold, batteryLowThreshold, highAlertMaxMinutes);
 
             settingsForm.ActiveChanged          += SettingsForm_ActiveChanged;
@@ -105,47 +142,55 @@ namespace SentinelApp
             header.Font    = new Font(contextMenu.Font, FontStyle.Bold);
             contextMenu.Items.Add(header);
             contextMenu.Items.Add(new ToolStripSeparator());
-            contextMenu.Items.Add("Impostazioni...", null, (s, e) => ShowSettings());
+            contextMenu.Items.Add(L.T("Impostazioni...", "Settings..."), null, (s, e) => ShowSettings());
             contextMenu.Items.Add(new ToolStripSeparator());
-            contextMenu.Items.Add("Esci", null, new EventHandler(Exit));
+            contextMenu.Items.Add(L.T("Esci", "Exit"), null, Exit);
             trayIcon.ContextMenuStrip = contextMenu;
 
-            UpdateTrayText();
+            SystemEvents.SessionSwitch += SystemEvents_SessionSwitch;
+
             SetAwakeState(isAwake);
+            UpdateTray();
             if (batteryMonitorEnabled) batteryTimer.Start();
 
-            ShowSettings();
+            if (!fromStartup) ShowSettings();   // at login it stays quiet in the tray
         }
 
         // ── Keep-Alive ────────────────────────────────────────────────────────
 
+        private bool IsInScheduledPause()
+        {
+            if (!isScheduleEnabled) return false;
+            TimeSpan now = DateTime.Now.TimeOfDay;
+            return (scheduleStart <= scheduleEnd)
+                ? (now >= scheduleStart && now < scheduleEnd)
+                : (now >= scheduleStart || now < scheduleEnd);   // pause across midnight
+        }
+
         private void InputTimer_Tick(object sender, EventArgs e)
         {
-            if (isScheduleEnabled)
+            ApplyExecutionState();
+            if (isAwake && !isLocked && !IsInScheduledPause() && GetIdleTimeMs() > 55000)
             {
-                TimeSpan now = DateTime.Now.TimeOfDay;
-                bool inPause = (scheduleStart <= scheduleEnd)
-                    ? (now >= scheduleStart && now < scheduleEnd)
-                    : (now >= scheduleStart || now < scheduleEnd);
-
-                if (inPause)
-                {
-                    SetThreadExecutionState(ES_CONTINUOUS);
-                    trayIcon.Text = "Sentinel: In Pausa (Programmata)";
-                    return;
-                }
+                keybd_event(VK_F15, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_F15, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             }
+            UpdateTray();
+        }
 
-            if (isAwake)
-            {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-                if (GetIdleTimeMs() > 55000)
-                {
-                    keybd_event(VK_F15, 0, 0, UIntPtr.Zero);
-                    keybd_event(VK_F15, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                }
-            }
-            UpdateTrayText();
+        // What we ask Windows: nothing when off or paused, PC only when locked, PC + screen otherwise.
+        private void ApplyExecutionState()
+        {
+            if (!isAwake || IsInScheduledPause()) SetThreadExecutionState(ES_CONTINUOUS);
+            else if (isLocked)                    SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+            else                                  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        }
+
+        private void SystemEvents_SessionSwitch(object sender, SessionSwitchEventArgs e)
+        {
+            if (e.Reason == SessionSwitchReason.SessionLock)   isLocked = true;
+            if (e.Reason == SessionSwitchReason.SessionUnlock) isLocked = false;
+            ApplyExecutionState();
         }
 
         private uint GetIdleTimeMs()
@@ -206,7 +251,7 @@ namespace SentinelApp
                 }
                 else
                 {
-                    ShowLowBalloon(ps); // re-show while still needed
+                    ShowLowBalloon(pct); // re-show while still needed
                 }
             }
 
@@ -214,7 +259,7 @@ namespace SentinelApp
             if (!_highAlertActive && !_lowAlertActive)
                 batteryRefreshTimer.Stop();
 
-            UpdateTrayText();
+            UpdateTray();
         }
 
         private void CheckBatteryState()
@@ -223,7 +268,7 @@ namespace SentinelApp
             bool        charger = ps.PowerLineStatus == PowerLineStatus.Online;
             float       f       = ps.BatteryLifePercent;
 
-            if (f < 0 || f > 1) return;
+            if (f < 0 || f > 1) return;   // desktop PC, no battery: nothing to watch
 
             int pct = (int)Math.Round(f * 100);
 
@@ -251,7 +296,7 @@ namespace SentinelApp
             {
                 if (!_lowAlertActive)
                 {
-                    ShowLowBalloon(ps);
+                    ShowLowBalloon(pct);
                     _lowAlertActive = true;
                     batteryRefreshTimer.Start();
                 }
@@ -266,23 +311,24 @@ namespace SentinelApp
                 }
             }
 
-            UpdateTrayText();
+            UpdateTray();
         }
 
         private void ShowHighBalloon(int pct)
         {
             trayIcon.ShowBalloonTip(30000,
-                "Sentinel \u2013 Batteria Alta",
-                string.Format("\U0001F50B Batteria al {0}%\nStacca il cavo di alimentazione per proteggere la batteria!", pct),
+                L.T("Sentinel – Batteria alta", "Sentinel – Battery high"),
+                string.Format(L.T("\U0001F50B Batteria al {0}%\nStacca il caricatore, la batteria ringrazia.",
+                                  "\U0001F50B Battery at {0}%\nUnplug the charger, your battery will thank you."), pct),
                 ToolTipIcon.Warning);
         }
 
-        private void ShowLowBalloon(PowerStatus ps)
+        private void ShowLowBalloon(int pct)
         {
-            int pct = (int)Math.Round(ps.BatteryLifePercent * 100);
             trayIcon.ShowBalloonTip(30000,
-                "Sentinel \u2013 Batteria Bassa",
-                string.Format("\U0001F50B Batteria al {0}%\nCollega il caricatore subito!", pct),
+                L.T("Sentinel – Batteria bassa", "Sentinel – Battery low"),
+                string.Format(L.T("\U0001F50B Batteria al {0}%\nCollega il caricatore, adesso.",
+                                  "\U0001F50B Battery at {0}%\nPlug in the charger, now."), pct),
                 ToolTipIcon.Error);
         }
 
@@ -292,14 +338,17 @@ namespace SentinelApp
             trayIcon.Visible = true;
         }
 
+        // ── Tray icon + text ──────────────────────────────────────────────────
 
-        // ── Tray text ─────────────────────────────────────────────────────────
-
-        private void UpdateTrayText()
+        private void UpdateTray()
         {
-            string status = isAwake ? "Attivo" : "Inattivo";
-            string batt   = "";
+            bool   paused = isAwake && IsInScheduledPause();
+            string status = !isAwake ? L.T("Spento", "Off")
+                          : paused   ? L.T("In pausa (programmata)", "Paused (scheduled)")
+                          :            L.T("Attivo", "Active");
+            trayIcon.Icon = (isAwake && !paused) ? iconOn : iconOff;
 
+            string batt = "";
             if (batteryMonitorEnabled)
             {
                 PowerStatus ps = SystemInformation.PowerStatus;
@@ -307,7 +356,7 @@ namespace SentinelApp
                 if (f >= 0 && f <= 1)
                 {
                     int pct    = (int)Math.Round(f * 100);
-                    string plug = (ps.PowerLineStatus == PowerLineStatus.Online) ? "\u26a1" : "\U0001f50b";
+                    string plug = (ps.PowerLineStatus == PowerLineStatus.Online) ? "⚡" : "\U0001f50b";
                     batt = string.Format(" | {0}{1}%", plug, pct);
                 }
             }
@@ -322,7 +371,7 @@ namespace SentinelApp
         {
             isAwake = settingsForm.chkActive.Checked;
             SetAwakeState(isAwake);
-            UpdateTrayText();
+            UpdateTray();
             SaveSettings();
         }
 
@@ -332,7 +381,8 @@ namespace SentinelApp
             scheduleStart     = settingsForm.dtpStartTime.Value.TimeOfDay;
             scheduleEnd       = settingsForm.dtpEndTime.Value.TimeOfDay;
             SaveSettings();
-            UpdateTrayText();
+            ApplyExecutionState();
+            UpdateTray();
         }
 
         private void SettingsForm_BatterySettingsChanged(object sender, EventArgs e)
@@ -355,7 +405,7 @@ namespace SentinelApp
                 batteryTimer.Stop();
 
             SaveSettings();
-            UpdateTrayText();
+            UpdateTray();
         }
 
         // ── Registry ──────────────────────────────────────────────────────────
@@ -388,7 +438,7 @@ namespace SentinelApp
                     v = key.GetValue("HighAlertMaxMinutes");  if (v != null) highAlertMaxMinutes   = Convert.ToInt32(v);
                 }
             }
-            catch { }
+            catch { }   // broken registry values: defaults win, no drama
         }
 
         private void SaveSettings()
@@ -415,16 +465,9 @@ namespace SentinelApp
 
         private void SetAwakeState(bool awake)
         {
-            if (awake)
-            {
-                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-                inputTimer.Start();
-            }
-            else
-            {
-                SetThreadExecutionState(ES_CONTINUOUS);
-                inputTimer.Stop();
-            }
+            ApplyExecutionState();
+            if (awake) inputTimer.Start();
+            else       inputTimer.Stop();
         }
 
         private void SettingsForm_StartupChanged(object sender, EventArgs e)
@@ -438,33 +481,12 @@ namespace SentinelApp
             else settingsForm.Show();
         }
 
-        private void TrayIcon_MouseDoubleClick(object sender, MouseEventArgs e) { ShowSettings(); }
-
-        private void LoadIcon()
-        {
-            try
-            {
-                string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sentinel.png");
-                if (File.Exists(p)) { using (Bitmap b = new Bitmap(p)) trayIcon.Icon = Icon.FromHandle(b.GetHicon()); }
-                else trayIcon.Icon = SystemIcons.Shield;
-            }
-            catch
-            {
-                try
-                {
-                    string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sentinel_icon.ico");
-                    trayIcon.Icon = File.Exists(p) ? new Icon(p) : SystemIcons.Shield;
-                }
-                catch { trayIcon.Icon = SystemIcons.Shield; }
-            }
-        }
-
         private bool IsStartupEnabled()
         {
             try
             {
-                using (var k = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false))
-                    return k.GetValue(AppName) != null;
+                using (var k = Registry.CurrentUser.OpenSubKey(RunPath, false))
+                    return k != null && k.GetValue(AppName) != null;
             }
             catch { return false; }
         }
@@ -473,18 +495,21 @@ namespace SentinelApp
         {
             try
             {
-                using (var k = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+                using (var k = Registry.CurrentUser.OpenSubKey(RunPath, true))
                 {
-                    if (enable) k.SetValue(AppName, Application.ExecutablePath);
+                    // quoted path: a folder with spaces in the name must not break the autostart
+                    if (enable) k.SetValue(AppName, "\"" + Application.ExecutablePath + "\" --startup");
                     else k.DeleteValue(AppName, false);
                 }
             }
-            catch (Exception ex) { MessageBox.Show("Errore avvio automatico: " + ex.Message); }
+            catch (Exception ex) { MessageBox.Show(L.T("Avvio automatico non impostato: ", "Couldn't set autostart: ") + ex.Message); }
         }
 
         private void Exit(object sender, EventArgs e)
         {
             SetThreadExecutionState(ES_CONTINUOUS);
+            SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
+            inputTimer.Stop();
             batteryTimer.Stop();
             batteryRefreshTimer.Stop();
             trayIcon.Visible = false;

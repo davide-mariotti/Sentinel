@@ -4,11 +4,11 @@ using System.Runtime.InteropServices;
 
 // General Information
 [assembly: AssemblyTitle("Sentinel")]
-[assembly: AssemblyDescription("Prevent PC Standby Tool")]
+[assembly: AssemblyDescription("Keeps your Windows PC awake")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
+[assembly: AssemblyCompany("Davide Mariotti")]
 [assembly: AssemblyProduct("Sentinel")]
-[assembly: AssemblyCopyright("Copyright © 2026")]
+[assembly: AssemblyCopyright("Copyright © 2026 Davide Mariotti")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -18,5 +18,5 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 
 // Version information
-[assembly: AssemblyVersion("2.3.0.0")]
-[assembly: AssemblyFileVersion("2.3.0.0")]
+[assembly: AssemblyVersion("2.4.0.0")]
+[assembly: AssemblyFileVersion("2.4.0.0")]

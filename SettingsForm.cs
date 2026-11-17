@@ -129,24 +129,24 @@ namespace SentinelApp
             this.lblTitle.AutoSize = true;
             this.lblTitle.Font     = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point, 0);
             this.lblTitle.Location = new Point(12, 9);
-            this.lblTitle.Text     = "Settings";
+            this.lblTitle.Text     = L.T("Impostazioni", "Settings");
 
             // chkActive
             this.chkActive.AutoSize = true;
             this.chkActive.Font     = new Font("Segoe UI", 10F);
             this.chkActive.Location = new Point(20, 40);
-            this.chkActive.Text     = "Attivo (Previene Standby)";
+            this.chkActive.Text     = L.T("Attivo (niente standby)", "Active (no standby)");
 
             // chkStartup
             this.chkStartup.AutoSize = true;
             this.chkStartup.Font     = new Font("Segoe UI", 10F);
             this.chkStartup.Location = new Point(20, 68);
-            this.chkStartup.Text     = "Esegui all'avvio";
+            this.chkStartup.Text     = L.T("Avvia con Windows", "Start with Windows");
 
             // grpSchedule
             this.grpSchedule.Location = new Point(12, 100);
             this.grpSchedule.Size     = new Size(276, 100);
-            this.grpSchedule.Text     = "Sospensione Programmata";
+            this.grpSchedule.Text     = L.T("Pausa programmata", "Scheduled pause");
             this.grpSchedule.Controls.AddRange(new Control[] {
                 this.chkScheduleEnabled,
                 this.lblStart, this.dtpStartTime,
@@ -155,11 +155,11 @@ namespace SentinelApp
 
             this.chkScheduleEnabled.AutoSize = true;
             this.chkScheduleEnabled.Location = new Point(10, 20);
-            this.chkScheduleEnabled.Text     = "Abilita (Pausa in Mensa)";
+            this.chkScheduleEnabled.Text     = L.T("Abilita (pausa pranzo)", "Enable (lunch break)");
 
             this.lblStart.AutoSize = true;
             this.lblStart.Location = new Point(7, 50);
-            this.lblStart.Text     = "Inizio:";
+            this.lblStart.Text     = L.T("Inizio:", "From:");
 
             this.dtpStartTime.Format     = DateTimePickerFormat.Time;
             this.dtpStartTime.ShowUpDown = true;
@@ -168,7 +168,7 @@ namespace SentinelApp
 
             this.lblEnd.AutoSize = true;
             this.lblEnd.Location = new Point(7, 75);
-            this.lblEnd.Text     = "Fine:";
+            this.lblEnd.Text     = L.T("Fine:", "To:");
 
             this.dtpEndTime.Format     = DateTimePickerFormat.Time;
             this.dtpEndTime.ShowUpDown = true;
@@ -178,7 +178,7 @@ namespace SentinelApp
             // grpBattery
             this.grpBattery.Location = new Point(12, 212);
             this.grpBattery.Size     = new Size(276, 145);
-            this.grpBattery.Text     = "Monitoraggio Batteria";
+            this.grpBattery.Text     = L.T("Batteria", "Battery");
             this.grpBattery.Controls.AddRange(new Control[] {
                 this.chkBatteryMonitor,
                 this.lblHighThreshold, this.nudHighThreshold, this.lblHighPct,
@@ -190,12 +190,12 @@ namespace SentinelApp
             this.chkBatteryMonitor.AutoSize = true;
             this.chkBatteryMonitor.Font     = new Font("Segoe UI", 9.5F, FontStyle.Bold);
             this.chkBatteryMonitor.Location = new Point(10, 20);
-            this.chkBatteryMonitor.Text     = "Abilita avvisi batteria";
+            this.chkBatteryMonitor.Text     = L.T("Avvisi batteria", "Battery alerts");
 
             // Row 1 – High threshold
             this.lblHighThreshold.AutoSize = true;
             this.lblHighThreshold.Location = new Point(10, 50);
-            this.lblHighThreshold.Text     = "Soglia Alta (scollega):";
+            this.lblHighThreshold.Text     = L.T("Soglia alta (scollega):", "High (unplug) at:");
 
             this.nudHighThreshold.Location = new Point(158, 47);
             this.nudHighThreshold.Size     = new Size(52, 20);
@@ -210,7 +210,7 @@ namespace SentinelApp
             // Row 2 – Low threshold
             this.lblLowThreshold.AutoSize = true;
             this.lblLowThreshold.Location = new Point(10, 80);
-            this.lblLowThreshold.Text     = "Soglia Bassa (attacca):";
+            this.lblLowThreshold.Text     = L.T("Soglia bassa (attacca):", "Low (plug in) at:");
 
             this.nudLowThreshold.Location = new Point(158, 77);
             this.nudLowThreshold.Size     = new Size(52, 20);
@@ -225,7 +225,7 @@ namespace SentinelApp
             // Row 3 – High alert max duration
             this.lblHighMax.AutoSize = true;
             this.lblHighMax.Location = new Point(10, 110);
-            this.lblHighMax.Text     = "Durata max avviso alta:";
+            this.lblHighMax.Text     = L.T("Durata max avviso alta:", "High alert lasts max:");
 
             this.nudHighMaxMinutes.Location = new Point(158, 107);
             this.nudHighMaxMinutes.Size     = new Size(52, 20);
@@ -240,7 +240,7 @@ namespace SentinelApp
             // btnClose
             this.btnClose.Location = new Point(100, 370);
             this.btnClose.Size     = new Size(80, 30);
-            this.btnClose.Text     = "Chiudi";
+            this.btnClose.Text     = L.T("Chiudi", "Close");
             this.btnClose.Click   += (s, e) => this.Hide();
 
             // Form
@@ -260,11 +260,8 @@ namespace SentinelApp
             this.ShowInTaskbar   = true;
             this.StartPosition   = FormStartPosition.CenterScreen;
 
-            string version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
-            this.Text = "Settings - v" + version;
-
-            try { if (System.IO.File.Exists("sentinel.ico")) this.Icon = new Icon("sentinel.ico"); }
-            catch { }
+            this.Text = "Sentinel " + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+            this.Icon = L.AppIcon("Sentinel.ico", new Size(32, 32));
 
             ((System.ComponentModel.ISupportInitialize)this.nudHighThreshold).EndInit();
             ((System.ComponentModel.ISupportInitialize)this.nudLowThreshold).EndInit();
