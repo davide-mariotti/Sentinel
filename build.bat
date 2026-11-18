@@ -11,4 +11,6 @@ if %errorlevel% neq 0 (
     pause
     exit /b %errorlevel%
 )
-echo Done: Sentinel.exe
+echo Packing Sentinel-portable.zip (the same exe plus Sentinel.ini)...
+powershell -NoProfile -Command "$d = Join-Path $env:TEMP 'sentinel-portable'; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory $d | Out-Null; Copy-Item Sentinel.exe $d; Set-Content (Join-Path $d 'Sentinel.ini') '; Sentinel settings. While this file sits next to Sentinel.exe, nothing goes to the registry.'; Compress-Archive (Join-Path $d '*') Sentinel-portable.zip -Force; Remove-Item $d -Recurse -Force"
+echo Done: Sentinel.exe and Sentinel-portable.zip

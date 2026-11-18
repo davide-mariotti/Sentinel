@@ -85,6 +85,19 @@ namespace SentinelApp
 
         private void Fire(EventHandler ev) { if (ev != null) ev(this, EventArgs.Empty); }
 
+        // Portable version: no autostart (it would need the registry), a note where the checkbox was
+        public void ShowPortable()
+        {
+            chkStartup.Visible = false;
+            var note = new Label();
+            note.AutoSize  = true;
+            note.ForeColor = SystemColors.GrayText;
+            note.Location  = new Point(22, 70);
+            note.Text      = L.T("Portable: impostazioni in Sentinel.ini", "Portable: settings in Sentinel.ini");
+            Controls.Add(note);
+            Text += " portable";
+        }
+
         private void SetBatteryControlsEnabled(bool on)
         {
             nudHighThreshold.Enabled  = on;

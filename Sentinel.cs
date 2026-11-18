@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -62,6 +64,12 @@ namespace SentinelApp
         private const string AppName      = "Sentinel";
         private const string RegistryPath = "SOFTWARE\\SentinelApp";
         private const string RunPath      = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+        // Portable version: a Sentinel.ini next to the exe. Settings live in that file and the registry
+        // is never touched, autostart included. Same exe: the file alone makes the difference.
+        private static readonly string IniPath  = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath), "Sentinel.ini");
+        public  static readonly bool   Portable = File.Exists(IniPath);
+        private const string IniHeader = "; Sentinel settings. While this file sits next to Sentinel.exe, nothing goes to the registry.";
 
         // ── Battery Monitor ───────────────────────────────────────────────────
         private bool batteryMonitorEnabled = true;
@@ -133,12 +141,13 @@ namespace SentinelApp
             batteryRefreshTimer.Interval = 28000;
             batteryRefreshTimer.Tick    += BatteryRefreshTimer_Tick;
 
-            bool startup = IsStartupEnabled();
+            bool startup = !Portable && IsStartupEnabled();
             if (startup) SetStartup(true);   // refresh the Run entry: exe moved, or written by an older version
 
             settingsForm = new SettingsForm(
                 isAwake, startup, isScheduleEnabled, scheduleStart, scheduleEnd,
                 batteryMonitorEnabled, batteryHighThreshold, batteryLowThreshold, highAlertMaxMinutes);
+            if (Portable) settingsForm.ShowPortable();
 
             settingsForm.ActiveChanged          += SettingsForm_ActiveChanged;
             settingsForm.StartupChanged         += SettingsForm_StartupChanged;
@@ -377,7 +386,7 @@ namespace SentinelApp
                 }
             }
 
-            string full = string.Format("Sentinel: {0}{1}", status, batt);
+            string full = string.Format(Portable ? "Sentinel portable: {0}{1}" : "Sentinel: {0}{1}", status, batt);
             trayIcon.Text = full.Length > 63 ? full.Substring(0, 63) : full;
         }
 
@@ -424,7 +433,7 @@ namespace SentinelApp
             UpdateTray();
         }
 
-        // ── Registry ──────────────────────────────────────────────────────────
+        // ── Settings: registry, or Sentinel.ini in the portable version ───────
 
         private void LoadSettings()
         {
@@ -439,42 +448,67 @@ namespace SentinelApp
 
             try
             {
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryPath))
-                {
-                    if (key == null) return;
-                    object v;
-
-                    v = key.GetValue("IsAwake");              if (v != null) isAwake              = Convert.ToBoolean(v);
-                    v = key.GetValue("ScheduleEnabled");      if (v != null) isScheduleEnabled    = Convert.ToBoolean(v);
-                    v = key.GetValue("ScheduleStartTicks");   if (v != null) scheduleStart        = TimeSpan.FromTicks(Convert.ToInt64(v));
-                    v = key.GetValue("ScheduleEndTicks");     if (v != null) scheduleEnd          = TimeSpan.FromTicks(Convert.ToInt64(v));
-                    v = key.GetValue("BatteryMonitorEnabled");if (v != null) batteryMonitorEnabled = Convert.ToBoolean(v);
-                    v = key.GetValue("BatteryHighThreshold"); if (v != null) batteryHighThreshold  = Convert.ToInt32(v);
-                    v = key.GetValue("BatteryLowThreshold");  if (v != null) batteryLowThreshold   = Convert.ToInt32(v);
-                    v = key.GetValue("HighAlertMaxMinutes");  if (v != null) highAlertMaxMinutes   = Convert.ToInt32(v);
-                }
+                Dictionary<string, string> v = ReadValues();
+                string s;
+                if (v.TryGetValue("IsAwake",               out s)) isAwake              = Convert.ToBoolean(s);
+                if (v.TryGetValue("ScheduleEnabled",       out s)) isScheduleEnabled    = Convert.ToBoolean(s);
+                if (v.TryGetValue("ScheduleStartTicks",    out s)) scheduleStart        = TimeSpan.FromTicks(Convert.ToInt64(s));
+                if (v.TryGetValue("ScheduleEndTicks",      out s)) scheduleEnd          = TimeSpan.FromTicks(Convert.ToInt64(s));
+                if (v.TryGetValue("BatteryMonitorEnabled", out s)) batteryMonitorEnabled = Convert.ToBoolean(s);
+                if (v.TryGetValue("BatteryHighThreshold",  out s)) batteryHighThreshold  = Convert.ToInt32(s);
+                if (v.TryGetValue("BatteryLowThreshold",   out s)) batteryLowThreshold   = Convert.ToInt32(s);
+                if (v.TryGetValue("HighAlertMaxMinutes",   out s)) highAlertMaxMinutes   = Convert.ToInt32(s);
             }
-            catch { }   // broken registry values: defaults win, no drama
+            catch { }   // broken values: defaults win, no drama
+        }
+
+        // Every saved value as text: registry values, or "name=value" lines of Sentinel.ini
+        private Dictionary<string, string> ReadValues()
+        {
+            var d = new Dictionary<string, string>();
+            if (Portable)
+            {
+                foreach (string line in File.ReadAllLines(IniPath))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq > 0 && !line.StartsWith(";")) d[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+                }
+                return d;
+            }
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryPath))
+                if (key != null)
+                    foreach (string name in key.GetValueNames())
+                        d[name] = Convert.ToString(key.GetValue(name), CultureInfo.InvariantCulture);
+            return d;
         }
 
         private void SaveSettings()
         {
+            var values = new Dictionary<string, object>
+            {
+                { "IsAwake",               isAwake },
+                { "ScheduleEnabled",       isScheduleEnabled },
+                { "ScheduleStartTicks",    scheduleStart.Ticks },
+                { "ScheduleEndTicks",      scheduleEnd.Ticks },
+                { "BatteryMonitorEnabled", batteryMonitorEnabled },
+                { "BatteryHighThreshold",  batteryHighThreshold },
+                { "BatteryLowThreshold",   batteryLowThreshold },
+                { "HighAlertMaxMinutes",   highAlertMaxMinutes },
+            };
             try
             {
-                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath))
+                if (Portable)
                 {
-                    if (key == null) return;
-                    key.SetValue("IsAwake",               isAwake);
-                    key.SetValue("ScheduleEnabled",       isScheduleEnabled);
-                    key.SetValue("ScheduleStartTicks",    scheduleStart.Ticks);
-                    key.SetValue("ScheduleEndTicks",      scheduleEnd.Ticks);
-                    key.SetValue("BatteryMonitorEnabled", batteryMonitorEnabled);
-                    key.SetValue("BatteryHighThreshold",  batteryHighThreshold);
-                    key.SetValue("BatteryLowThreshold",   batteryLowThreshold);
-                    key.SetValue("HighAlertMaxMinutes",   highAlertMaxMinutes);
+                    var lines = new List<string> { IniHeader };
+                    foreach (var kv in values) lines.Add(kv.Key + "=" + Convert.ToString(kv.Value, CultureInfo.InvariantCulture));
+                    File.WriteAllLines(IniPath, lines.ToArray());
+                    return;
                 }
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath))
+                    if (key != null)
+                        foreach (var kv in values) key.SetValue(kv.Key, kv.Value);   // same types as before: bool and long as text, int as DWORD
             }
-            catch { }
+            catch { }   // read-only stick or locked key: the change doesn't stick, Sentinel keeps working
         }
 
         // ── Startup / Exit ────────────────────────────────────────────────────

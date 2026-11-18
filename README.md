@@ -31,7 +31,7 @@
 ### What it doesn't do
 
 - It doesn't move the pointer and doesn't press any key, so it can't change what's under your cursor (an Excel cell, say).
-- It doesn't need admin rights, doesn't install anything, doesn't touch your power plan. Settings live in one registry key of your user (`HKCU\SOFTWARE\SentinelApp`).
+- It doesn't need admin rights, doesn't install anything, doesn't touch your power plan. Settings live in one registry key of your user (`HKCU\SOFTWARE\SentinelApp`), or in `Sentinel.ini` in the portable version.
 - It doesn't connect to the internet. Ever. No telemetry, no auto-updates, no account.
 - It doesn't stop you from locking or shutting down the PC. Turn it off from the settings and Windows is back in charge right away.
 - It doesn't run on macOS or Linux.
@@ -42,6 +42,8 @@
 1. Download [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (75 KB). Windows 10 or 11, nothing else to install.
 2. Put it in a folder that stays put (say `Documents\Tools`), not in Downloads.
 3. Double-click it. The first time, SmartScreen may complain because the exe isn't signed: *More info* → *Run anyway*. A signing certificate costs more than all the coffees this app has earned so far.
+
+**Portable version**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (65 KB), the same exe with a `Sentinel.ini` next to it. Unzip it anywhere, a USB stick too. As long as `Sentinel.ini` sits next to the exe, the settings are saved in that file and the registry is never touched. That's also why this version can't start with Windows.
 
 ### How to use it
 
@@ -95,7 +97,7 @@ If Sentinel saved you from an "appears away" or from a screensaver in the middle
 ### Cosa non fa
 
 - Non sposta il puntatore e non preme nessun tasto, quindi non può toccare quello che hai sotto il cursore (una cella di Excel, per dire).
-- Non chiede permessi da amministratore, non si installa, non tocca le impostazioni di risparmio energia. Le impostazioni stanno in una chiave di registro del tuo utente (`HKCU\SOFTWARE\SentinelApp`).
+- Non chiede permessi da amministratore, non si installa, non tocca le impostazioni di risparmio energia. Le impostazioni stanno in una chiave di registro del tuo utente (`HKCU\SOFTWARE\SentinelApp`), o in `Sentinel.ini` nella versione portable.
 - Non si collega a internet. Mai. Niente telemetria, niente aggiornamenti automatici, niente account.
 - Non ti impedisce di bloccare o spegnere il PC. Se lo disattivi dalle impostazioni, Windows torna a decidere subito.
 - Non gira su macOS o Linux.
@@ -106,6 +108,8 @@ If Sentinel saved you from an "appears away" or from a screensaver in the middle
 1. Scarica [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (75 KB). Windows 10 o 11, nient'altro da installare.
 2. Mettilo in una cartella che non sposti (tipo `Documenti\Strumenti`), non in Download.
 3. Doppio clic. La prima volta SmartScreen potrebbe lamentarsi perché l'exe non è firmato: *Ulteriori informazioni* → *Esegui comunque*. Il certificato per firmarlo costa più di tutti i caffè che questa app ha guadagnato finora.
+
+**Versione portable**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (65 KB), lo stesso exe con accanto un `Sentinel.ini`. Lo scompatti dove vuoi, anche su una chiavetta. Finché `Sentinel.ini` sta vicino all'exe, le impostazioni si salvano in quel file e il registro non viene mai toccato. Per lo stesso motivo questa versione non si avvia con Windows.
 
 ### Come si usa
 
