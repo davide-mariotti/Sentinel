@@ -81,19 +81,28 @@ namespace SentinelApp
         // P/Invoke
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         static extern uint SetThreadExecutionState(uint esFlags);
-        [DllImport("user32.dll")]
-        static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
         [DllImport("user32.dll")]
         static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
         [StructLayout(LayoutKind.Sequential)]
         struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct INPUT { public uint type; public MOUSEINPUT mi; }   // the mouse is the biggest member of the union: same size
 
         private const uint ES_CONTINUOUS       = 0x80000000;
         private const uint ES_SYSTEM_REQUIRED  = 0x00000001;
         private const uint ES_DISPLAY_REQUIRED = 0x00000002;
-        private const int  KEYEVENTF_KEYUP     = 0x0002;
-        private const byte VK_F15              = 0x7E;   // a key no keyboard has: nobody notices it
+        private const uint INPUT_MOUSE         = 0;
+        private const uint MOUSEEVENTF_MOVE    = 0x0001;
+
+        // Checked every 20 s, nudged after 30 s still: Windows never sees more than ~50 s of idle,
+        // under the shortest screensaver (1 minute). With 60/55 it could reach almost 2 minutes.
+        private const int CheckEveryMs = 20000;
+        private const int NudgeAfterMs = 30000;
 
         private Timer inputTimer;
 
@@ -109,9 +118,9 @@ namespace SentinelApp
 
             LoadSettings();
 
-            // Keep-alive timer (60 s)
+            // Keep-alive timer
             inputTimer          = new Timer();
-            inputTimer.Interval = 60000;
+            inputTimer.Interval = CheckEveryMs;
             inputTimer.Tick    += InputTimer_Tick;
 
             // Battery main check (60 s)
@@ -170,12 +179,19 @@ namespace SentinelApp
         private void InputTimer_Tick(object sender, EventArgs e)
         {
             ApplyExecutionState();
-            if (isAwake && !isLocked && !IsInScheduledPause() && GetIdleTimeMs() > 55000)
-            {
-                keybd_event(VK_F15, 0, 0, UIntPtr.Zero);
-                keybd_event(VK_F15, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            }
+            if (isAwake && !isLocked && !IsInScheduledPause() && GetIdleTimeMs() > NudgeAfterMs) Nudge();
             UpdateTray();
+        }
+
+        // A mouse "move" of zero pixels. Windows counts it as activity (screensaver, Teams "away",
+        // idle lock), the pointer doesn't budge and no app gets a key. The F15 key used before did
+        // reach the app in front: in Excel it emptied the selected cell, formula included.
+        private static void Nudge()
+        {
+            INPUT[] input = new INPUT[1];
+            input[0].type        = INPUT_MOUSE;
+            input[0].mi.dwFlags  = MOUSEEVENTF_MOVE;
+            SendInput(1, input, Marshal.SizeOf(typeof(INPUT)));
         }
 
         // What we ask Windows: nothing when off or paused, PC only when locked, PC + screen otherwise.
@@ -318,8 +334,8 @@ namespace SentinelApp
         {
             trayIcon.ShowBalloonTip(30000,
                 L.T("Sentinel – Batteria alta", "Sentinel – Battery high"),
-                string.Format(L.T("\U0001F50B Batteria al {0}%\nStacca il caricatore, la batteria ringrazia.",
-                                  "\U0001F50B Battery at {0}%\nUnplug the charger, your battery will thank you."), pct),
+                string.Format(L.T("Batteria al {0}%\nStacca il caricatore, la batteria ringrazia.",
+                                  "Battery at {0}%\nUnplug the charger, your battery will thank you."), pct),
                 ToolTipIcon.Warning);
         }
 
@@ -327,8 +343,8 @@ namespace SentinelApp
         {
             trayIcon.ShowBalloonTip(30000,
                 L.T("Sentinel – Batteria bassa", "Sentinel – Battery low"),
-                string.Format(L.T("\U0001F50B Batteria al {0}%\nCollega il caricatore, adesso.",
-                                  "\U0001F50B Battery at {0}%\nPlug in the charger, now."), pct),
+                string.Format(L.T("Batteria al {0}%\nCollega il caricatore, adesso.",
+                                  "Battery at {0}%\nPlug in the charger, now."), pct),
                 ToolTipIcon.Error);
         }
 
@@ -355,9 +371,9 @@ namespace SentinelApp
                 float f = ps.BatteryLifePercent;
                 if (f >= 0 && f <= 1)
                 {
-                    int pct    = (int)Math.Round(f * 100);
-                    string plug = (ps.PowerLineStatus == PowerLineStatus.Online) ? "⚡" : "\U0001f50b";
-                    batt = string.Format(" | {0}{1}%", plug, pct);
+                    int pct     = (int)Math.Round(f * 100);
+                    string plug = (ps.PowerLineStatus == PowerLineStatus.Online) ? L.T(" in carica", " charging") : "";
+                    batt = string.Format(" | {0}%{1}", pct, plug);
                 }
             }
 
