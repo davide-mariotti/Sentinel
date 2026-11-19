@@ -13,6 +13,10 @@
   <a href="https://ko-fi.com/Z0X32ATNHL"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Buy me a coffee on Ko-fi"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/window.webp" width="320" alt="Sentinel's settings window: the main switch, how long the PC has been still, lunch break and battery alerts">
+</p>
+
 ---
 
 ## English
