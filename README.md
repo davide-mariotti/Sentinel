@@ -26,24 +26,25 @@
 - When you lock the PC (Win+L) the screen can turn off, but the PC stays awake: downloads and builds keep going.
 - Optional battery alerts for laptops: unplug at X%, plug in at Y%. A battery that doesn't sit at 100% all day lives longer.
 - Starts with Windows if you ask it to, quietly, in the tray.
+- Has a settings window in the style of my website: the main switch, what Sentinel is doing right now (how long mouse and keyboard have been still, when the next nudge comes), the lunch break, the battery.
 - Speaks Italian or English, following the language of Windows.
 
 ### What it doesn't do
 
 - It doesn't move the pointer and doesn't press any key, so it can't change what's under your cursor (an Excel cell, say).
 - It doesn't need admin rights, doesn't install anything, doesn't touch your power plan. Settings live in one registry key of your user (`HKCU\SOFTWARE\SentinelApp`), or in `Sentinel.ini` in the portable version.
-- It doesn't connect to the internet. Ever. No telemetry, no auto-updates, no account.
+- It doesn't connect to the internet. Ever. No telemetry, no auto-updates, no account. The settings window is a page packed inside the exe, shown by WebView2, the Edge engine that comes with Windows 10 and 11, and it only runs while the window is open.
 - It doesn't stop you from locking or shutting down the PC. Turn it off from the settings and Windows is back in charge right away.
 - It doesn't run on macOS or Linux.
 - It doesn't do your work for you. I tried.
 
 ### Download
 
-1. Download [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (75 KB). Windows 10 or 11, nothing else to install.
+1. Download [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (1.4 MB). Windows 10 or 11, nothing else to install.
 2. Put it in a folder that stays put (say `Documents\Tools`), not in Downloads.
 3. Double-click it. The first time, SmartScreen may complain because the exe isn't signed: *More info* → *Run anyway*. A signing certificate costs more than all the coffees this app has earned so far.
 
-**Portable version**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (65 KB), the same exe with a `Sentinel.ini` next to it. Unzip it anywhere, a USB stick too. As long as `Sentinel.ini` sits next to the exe, the settings are saved in that file and the registry is never touched. That's also why this version can't start with Windows.
+**Portable version**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (560 KB), the same exe with a `Sentinel.ini` next to it. Unzip it anywhere, a USB stick too. As long as `Sentinel.ini` sits next to the exe, the settings are saved in that file and the registry is never touched. That's also why this version can't start with Windows.
 
 ### How to use it
 
@@ -69,7 +70,7 @@ No Visual Studio needed: Windows already ships the C# compiler of .NET Framework
 build.bat
 ```
 
-You get `Sentinel.exe` next to the sources. The icons come from `icon/make-icons.py` (Python, Pillow and Chrome), drawn with [Lucide](https://lucide.dev) glyphs.
+You get `Sentinel.exe` and `Sentinel-portable.zip` next to the sources. The settings window in `ui\` (plain HTML, CSS and JavaScript, no build step) and WebView2 in `lib\` are packed inside the exe: what's in there, and its licenses, is in [lib/README.md](lib/README.md). The icons come from `icon/make-icons.py` (Python, Pillow and Chrome), drawn with [Lucide](https://lucide.dev) glyphs, the same ones the window uses.
 
 ### Support
 
@@ -92,24 +93,25 @@ If Sentinel saved you from an "appears away" or from a screensaver in the middle
 - Quando blocchi il PC (Win+L) lo schermo si può spegnere, ma il PC resta sveglio: download e build vanno avanti.
 - Avvisi batteria per i portatili, se li accendi: stacca il caricatore al X%, attaccalo al Y%. Una batteria che non sta tutto il giorno al 100% dura di più.
 - Si avvia con Windows, se glielo chiedi, e resta zitto nella tray.
+- Ha una finestra delle impostazioni nello stile del mio sito: l'interruttore principale, cosa sta facendo Sentinel in quel momento (da quanto mouse e tastiera sono fermi, quando arriva la prossima spinta), la pausa pranzo, la batteria.
 - Parla italiano o inglese, in base alla lingua di Windows.
 
 ### Cosa non fa
 
 - Non sposta il puntatore e non preme nessun tasto, quindi non può toccare quello che hai sotto il cursore (una cella di Excel, per dire).
 - Non chiede permessi da amministratore, non si installa, non tocca le impostazioni di risparmio energia. Le impostazioni stanno in una chiave di registro del tuo utente (`HKCU\SOFTWARE\SentinelApp`), o in `Sentinel.ini` nella versione portable.
-- Non si collega a internet. Mai. Niente telemetria, niente aggiornamenti automatici, niente account.
+- Non si collega a internet. Mai. Niente telemetria, niente aggiornamenti automatici, niente account. La finestra delle impostazioni è una pagina chiusa dentro l'exe, mostrata da WebView2, il motore di Edge che c'è già in Windows 10 e 11, e gira solo finché la finestra è aperta.
 - Non ti impedisce di bloccare o spegnere il PC. Se lo disattivi dalle impostazioni, Windows torna a decidere subito.
 - Non gira su macOS o Linux.
 - Non fa il lavoro al posto tuo. Ci ho provato.
 
 ### Scaricarlo
 
-1. Scarica [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (75 KB). Windows 10 o 11, nient'altro da installare.
+1. Scarica [Sentinel.exe](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel.exe) (1,4 MB). Windows 10 o 11, nient'altro da installare.
 2. Mettilo in una cartella che non sposti (tipo `Documenti\Strumenti`), non in Download.
 3. Doppio clic. La prima volta SmartScreen potrebbe lamentarsi perché l'exe non è firmato: *Ulteriori informazioni* → *Esegui comunque*. Il certificato per firmarlo costa più di tutti i caffè che questa app ha guadagnato finora.
 
-**Versione portable**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (65 KB), lo stesso exe con accanto un `Sentinel.ini`. Lo scompatti dove vuoi, anche su una chiavetta. Finché `Sentinel.ini` sta vicino all'exe, le impostazioni si salvano in quel file e il registro non viene mai toccato. Per lo stesso motivo questa versione non si avvia con Windows.
+**Versione portable**: [Sentinel-portable.zip](https://github.com/davide-mariotti/Sentinel/raw/main/Sentinel-portable.zip) (560 KB), lo stesso exe con accanto un `Sentinel.ini`. Lo scompatti dove vuoi, anche su una chiavetta. Finché `Sentinel.ini` sta vicino all'exe, le impostazioni si salvano in quel file e il registro non viene mai toccato. Per lo stesso motivo questa versione non si avvia con Windows.
 
 ### Come si usa
 
@@ -135,7 +137,7 @@ Non serve Visual Studio: Windows ha già il compilatore C# di .NET Framework 4.
 build.bat
 ```
 
-Ottieni `Sentinel.exe` accanto ai sorgenti. Le icone le genera `icon/make-icons.py` (Python, Pillow e Chrome), con i glifi di [Lucide](https://lucide.dev).
+Ottieni `Sentinel.exe` e `Sentinel-portable.zip` accanto ai sorgenti. La finestra delle impostazioni in `ui\` (HTML, CSS e JavaScript semplici, niente build) e WebView2 in `lib\` finiscono dentro l'exe: cosa c'è e con quali licenze è in [lib/README.md](lib/README.md). Le icone le genera `icon/make-icons.py` (Python, Pillow e Chrome), con i glifi di [Lucide](https://lucide.dev), gli stessi della finestra.
 
 ### Supporto
 

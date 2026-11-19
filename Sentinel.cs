@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using Timer = System.Windows.Forms.Timer;
@@ -16,6 +20,15 @@ namespace SentinelApp
     {
         [STAThread]
         static void Main(string[] args)
+        {
+            // WebView2 (the settings window) is packed inside the exe: still one file to download.
+            AppDomain.CurrentDomain.AssemblyResolve += Libs.Resolve;
+            Run(args);
+        }
+
+        // Kept apart from Main: the JIT must not meet a library type before the resolver is in place.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Run(string[] args)
         {
             bool first;
             using (var single = new Mutex(true, "Local\\SentinelApp", out first))
@@ -38,7 +51,7 @@ namespace SentinelApp
     // Italian if Windows speaks Italian, English otherwise. That's the whole i18n framework.
     public static class L
     {
-        static readonly bool It = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "it";
+        public static readonly bool It = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "it";
         public static string T(string it, string en) { return It ? it : en; }
 
         public static Icon AppIcon(string name, Size size)
@@ -46,6 +59,62 @@ namespace SentinelApp
             using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
                 return s == null ? SystemIcons.Shield : new Icon(s, size);
         }
+    }
+
+    public static class Libs
+    {
+        static readonly Dictionary<string, Assembly> Loaded = new Dictionary<string, Assembly>();
+
+        public static Stream Open(string name) { return Assembly.GetExecutingAssembly().GetManifestResourceStream(name); }
+
+        static byte[] Resource(string name)
+        {
+            using (Stream s = Open(name))
+            {
+                if (s == null) return null;
+                var m = new MemoryStream();
+                s.CopyTo(m);
+                return m.ToArray();
+            }
+        }
+
+        public static Assembly Resolve(object sender, ResolveEventArgs e)
+        {
+            string file = new AssemblyName(e.Name).Name + ".dll";
+            lock (Loaded)
+            {
+                Assembly a;
+                if (Loaded.TryGetValue(file, out a)) return a;
+                byte[] bytes = Resource(file);
+                if (bytes == null) return null;
+                a = Assembly.Load(bytes);
+                Loaded[file] = a;
+                return a;
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr LoadLibrary(string path);
+
+        // WebView2's loader is native: it can't be loaded from memory, so it goes to disk once, the one for this
+        // processor (Sentinel runs as x64, ARM64 or x86, whatever Windows is), then into the process by full path.
+        public static void LoadWebViewLoader(string folder)
+        {
+            string arch = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE");
+            string name = arch == "ARM64" ? "WebView2Loader.arm64.dll" : IntPtr.Size == 4 ? "WebView2Loader.x86.dll" : "WebView2Loader.x64.dll";
+            byte[] bytes = Resource(name);
+            string path = Path.Combine(folder, "WebView2Loader.dll");
+            Directory.CreateDirectory(folder);
+            if (!File.Exists(path) || new FileInfo(path).Length != bytes.Length) File.WriteAllBytes(path, bytes);
+            if (LoadLibrary(path) == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    public static class Json
+    {
+        static readonly JavaScriptSerializer S = new JavaScriptSerializer();
+        public static string Write(object o) { return S.Serialize(o); }
+        public static T Read<T>(string s) { return S.Deserialize<T>(s); }
     }
 
     public class SentinelContext : ApplicationContext
@@ -113,6 +182,7 @@ namespace SentinelApp
         private const int NudgeAfterMs = 30000;
 
         private Timer inputTimer;
+        private Timer statusTimer;
 
         public SentinelContext(bool fromStartup)
         {
@@ -144,15 +214,15 @@ namespace SentinelApp
             bool startup = !Portable && IsStartupEnabled();
             if (startup) SetStartup(true);   // refresh the Run entry: exe moved, or written by an older version
 
-            settingsForm = new SettingsForm(
-                isAwake, startup, isScheduleEnabled, scheduleStart, scheduleEnd,
-                batteryMonitorEnabled, batteryHighThreshold, batteryLowThreshold, highAlertMaxMinutes);
-            if (Portable) settingsForm.ShowPortable();
+            settingsForm = new SettingsForm(Path.Combine(Portable ? Path.GetTempPath() : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sentinel", "web"));
+            settingsForm.Message += OnMessage;
+            var handle = settingsForm.Handle;   // the window must exist, even hidden
 
-            settingsForm.ActiveChanged          += SettingsForm_ActiveChanged;
-            settingsForm.StartupChanged         += SettingsForm_StartupChanged;
-            settingsForm.ScheduleChanged        += SettingsForm_ScheduleChanged;
-            settingsForm.BatterySettingsChanged += SettingsForm_BatterySettingsChanged;
+            // while the window is open, it gets the live state once a second
+            statusTimer          = new Timer();
+            statusTimer.Interval = 1000;
+            statusTimer.Tick    += (s, e) => { if (settingsForm.PageReady) settingsForm.Post(Status()); };
+            statusTimer.Start();
 
             contextMenu = new ContextMenuStrip();
             var header = new ToolStripMenuItem("Sentinel");
@@ -390,33 +460,80 @@ namespace SentinelApp
             trayIcon.Text = full.Length > 63 ? full.Substring(0, 63) : full;
         }
 
-        // ── Settings sync ─────────────────────────────────────────────────────
+        // ── The settings window (a page in WebView2, ui\) ──────────────────────
 
-        private void SettingsForm_ActiveChanged(object sender, EventArgs e)
+        private Dictionary<string, object> Settings()
         {
-            isAwake = settingsForm.chkActive.Checked;
-            SetAwakeState(isAwake);
-            UpdateTray();
-            SaveSettings();
+            return new Dictionary<string, object> {
+                { "t", "settings" }, { "awake", isAwake }, { "startup", !Portable && IsStartupEnabled() },
+                { "schedule", isScheduleEnabled }, { "from", scheduleStart.ToString("hh\\:mm") }, { "to", scheduleEnd.ToString("hh\\:mm") },
+                { "battery", batteryMonitorEnabled }, { "high", batteryHighThreshold }, { "low", batteryLowThreshold }, { "highMinutes", highAlertMaxMinutes } };
         }
 
-        private void SettingsForm_ScheduleChanged(object sender, EventArgs e)
+        private Dictionary<string, object> Status()
         {
-            isScheduleEnabled = settingsForm.chkScheduleEnabled.Checked;
-            scheduleStart     = settingsForm.dtpStartTime.Value.TimeOfDay;
-            scheduleEnd       = settingsForm.dtpEndTime.Value.TimeOfDay;
-            SaveSettings();
-            ApplyExecutionState();
-            UpdateTray();
+            PowerStatus ps = SystemInformation.PowerStatus;
+            float f = ps.BatteryLifePercent;
+            bool hasBattery = f >= 0 && f <= 1 && ps.BatteryChargeStatus != BatteryChargeStatus.NoSystemBattery;
+            return new Dictionary<string, object> {
+                { "t", "status" }, { "awake", isAwake }, { "paused", isAwake && IsInScheduledPause() }, { "locked", isLocked },
+                { "idle", (int)(GetIdleTimeMs() / 1000) }, { "nudgeAfter", NudgeAfterMs / 1000 },
+                { "battery", hasBattery ? (object)(int)Math.Round(f * 100) : null }, { "charging", ps.PowerLineStatus == PowerLineStatus.Online } };
         }
 
-        private void SettingsForm_BatterySettingsChanged(object sender, EventArgs e)
+        // Everything the window asks for. The page is ours, but what it sends is still checked here.
+        private void OnMessage(Dictionary<string, object> m)
         {
-            batteryMonitorEnabled = settingsForm.chkBatteryMonitor.Checked;
-            batteryHighThreshold  = (int)settingsForm.nudHighThreshold.Value;
-            batteryLowThreshold   = (int)settingsForm.nudLowThreshold.Value;
-            highAlertMaxMinutes   = (int)settingsForm.nudHighMaxMinutes.Value;
+            object v;
+            switch (Convert.ToString(m.TryGetValue("t", out v) ? v : ""))
+            {
+                case "ready":
+                    settingsForm.Post(new Dictionary<string, object> {
+                        { "t", "init" }, { "lang", L.It ? "it" : "en" }, { "portable", Portable },
+                        { "version", Assembly.GetExecutingAssembly().GetName().Version.ToString(3) } });
+                    settingsForm.Post(Settings());
+                    settingsForm.Post(Status());
+                    return;
+                case "open":
+                    string url = m.TryGetValue("url", out v) ? Convert.ToString(v) : "";
+                    if (url == "https://github.com/davide-mariotti/Sentinel" || url == "https://ko-fi.com/Z0X32ATNHL")
+                        try { Process.Start("explorer.exe", "\"" + url + "\""); } catch { }
+                    return;
+                case "set":
+                    break;
+                default:
+                    return;
+            }
 
+            if (m.TryGetValue("awake", out v))
+            {
+                isAwake = Convert.ToBoolean(v);
+                SetAwakeState(isAwake);
+            }
+            if (m.TryGetValue("startup", out v) && !Portable) SetStartup(Convert.ToBoolean(v));
+
+            bool schedule = false;
+            TimeSpan t;
+            if (m.TryGetValue("schedule", out v)) { isScheduleEnabled = Convert.ToBoolean(v); schedule = true; }
+            if (m.TryGetValue("from", out v) && TimeSpan.TryParseExact(Convert.ToString(v), "hh\\:mm", CultureInfo.InvariantCulture, out t)) { scheduleStart = t; schedule = true; }
+            if (m.TryGetValue("to", out v) && TimeSpan.TryParseExact(Convert.ToString(v), "hh\\:mm", CultureInfo.InvariantCulture, out t)) { scheduleEnd = t; schedule = true; }
+            if (schedule) ApplyExecutionState();
+
+            bool battery = false;
+            if (m.TryGetValue("battery", out v))     { batteryMonitorEnabled = Convert.ToBoolean(v); battery = true; }
+            if (m.TryGetValue("high", out v))        { batteryHighThreshold = Math.Max(1, Math.Min(100, Convert.ToInt32(v))); battery = true; }
+            if (m.TryGetValue("low", out v))         { batteryLowThreshold  = Math.Max(1, Math.Min(100, Convert.ToInt32(v))); battery = true; }
+            if (m.TryGetValue("highMinutes", out v)) { highAlertMaxMinutes  = Math.Max(1, Math.Min(60, Convert.ToInt32(v))); battery = true; }
+            if (battery) ApplyBatterySettings();
+
+            SaveSettings();
+            UpdateTray();
+            settingsForm.Post(Settings());
+            settingsForm.Post(Status());
+        }
+
+        private void ApplyBatterySettings()
+        {
             // Reset all alert state on settings change
             _highAlertActive              = false;
             _highAlertPermanentlyDismissed = false;
@@ -428,9 +545,6 @@ namespace SentinelApp
                 batteryTimer.Start();
             else
                 batteryTimer.Stop();
-
-            SaveSettings();
-            UpdateTray();
         }
 
         // ── Settings: registry, or Sentinel.ini in the portable version ───────
@@ -520,15 +634,11 @@ namespace SentinelApp
             else       inputTimer.Stop();
         }
 
-        private void SettingsForm_StartupChanged(object sender, EventArgs e)
-        {
-            SetStartup(settingsForm.chkStartup.Checked);
-        }
-
         private void ShowSettings()
         {
-            if (settingsForm.Visible) settingsForm.Activate();
-            else settingsForm.Show();
+            if (!settingsForm.Visible) { settingsForm.Show(); return; }
+            if (settingsForm.WindowState == FormWindowState.Minimized) settingsForm.WindowState = FormWindowState.Normal;
+            settingsForm.Activate();
         }
 
         private bool IsStartupEnabled()
@@ -560,6 +670,7 @@ namespace SentinelApp
             SetThreadExecutionState(ES_CONTINUOUS);
             SystemEvents.SessionSwitch -= SystemEvents_SessionSwitch;
             inputTimer.Stop();
+            statusTimer.Stop();
             batteryTimer.Stop();
             batteryRefreshTimer.Stop();
             trayIcon.Visible = false;

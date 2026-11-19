@@ -1,293 +1,142 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 
 namespace SentinelApp
 {
+    // The settings window is a web page (ui\), shown by WebView2, the Edge engine that ships with Windows 10 and 11.
+    // The page comes from the exe's resources: nothing is fetched from the network.
     public class SettingsForm : Form
     {
-        // ── Keep-Alive ────────────────────────────────────────────────────────
-        public CheckBox chkActive;
-        public CheckBox chkStartup;
+        const string Host = "https://sentinel.localhost/";
+        static readonly Color Bg = Color.FromArgb(0x05, 0x07, 0x06);
 
-        // ── Schedule ──────────────────────────────────────────────────────────
-        public CheckBox       chkScheduleEnabled;
-        public DateTimePicker dtpStartTime;
-        public DateTimePicker dtpEndTime;
+        public event Action<Dictionary<string, object>> Message;
+        public bool PageReady { get; private set; }
 
-        // ── Battery ────────────────────────────────────────────────────────────
-        public CheckBox      chkBatteryMonitor;
-        public NumericUpDown nudHighThreshold;
-        public NumericUpDown nudLowThreshold;
-        public NumericUpDown nudHighMaxMinutes;
+        readonly string dataFolder;
+        WebView2 web;
 
-        // ── Private layout ────────────────────────────────────────────────────
-        private Label    lblTitle;
-        private Button   btnClose;
-        private GroupBox grpSchedule;
-        private Label    lblStart, lblEnd;
-        private GroupBox grpBattery;
-        private Label    lblHighThreshold, lblHighPct;
-        private Label    lblLowThreshold,  lblLowPct;
-        private Label    lblHighMax,        lblHighMaxMin;
-
-        // ── Events ────────────────────────────────────────────────────────────
-        public event EventHandler ActiveChanged;
-        public event EventHandler StartupChanged;
-        public event EventHandler ScheduleChanged;
-        public event EventHandler BatterySettingsChanged;
-
-        public SettingsForm(
-            bool initialActive, bool initialStartup,
-            bool initialSchedule, TimeSpan start, TimeSpan end,
-            bool batteryEnabled, int highThreshold, int lowThreshold, int highMaxMinutes)
+        public SettingsForm(string dataFolder)
         {
-            InitializeComponent();
+            this.dataFolder = dataFolder;
+            Text = "Sentinel";
+            Icon = L.AppIcon("Sentinel.ico", new Size(32, 32));
+            BackColor = Bg;
+            StartPosition = FormStartPosition.CenterScreen;
+            float dpi;
+            using (var g = CreateGraphics()) dpi = g.DpiX / 96f;   // the exe is DPI aware: sizes in real pixels
+            ClientSize = new Size((int)(560 * dpi), (int)(820 * dpi));
+            MinimumSize = new Size((int)(460 * dpi), (int)(560 * dpi));
+        }
 
-            chkActive.Checked          = initialActive;
-            chkStartup.Checked         = initialStartup;
-            chkScheduleEnabled.Checked = initialSchedule;
+        [DllImport("dwmapi.dll")]
+        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
-            DateTime today = DateTime.Today;
-            dtpStartTime.Value   = today.Add(start);
-            dtpEndTime.Value     = today.Add(end);
-            dtpStartTime.Enabled = initialSchedule;
-            dtpEndTime.Enabled   = initialSchedule;
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            // dark title bar (Windows 10 2004+), and on Windows 11 the same black as the page
+            int on = 1, black = 0x00060705;   // COLORREF is 0x00BBGGRR
+            DwmSetWindowAttribute(Handle, 20, ref on, 4);
+            DwmSetWindowAttribute(Handle, 35, ref black, 4);
+        }
 
-            chkBatteryMonitor.Checked = batteryEnabled;
-            nudHighThreshold.Value    = highThreshold;
-            nudLowThreshold.Value     = lowThreshold;
-            nudHighMaxMinutes.Value   = highMaxMinutes;
-            SetBatteryControlsEnabled(batteryEnabled);
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible) { if (web == null) Open(); }
+            else Close_();   // in the tray Sentinel stays tiny: the browser engine only lives while the window is open
+        }
 
-            // Events
-            chkActive.CheckedChanged  += (s, e) => Fire(ActiveChanged);
-            chkStartup.CheckedChanged += (s, e) => Fire(StartupChanged);
-
-            chkScheduleEnabled.CheckedChanged += (s, e) =>
+        async void Open()
+        {
+            try
             {
-                dtpStartTime.Enabled = chkScheduleEnabled.Checked;
-                dtpEndTime.Enabled   = chkScheduleEnabled.Checked;
-                Fire(ScheduleChanged);
-            };
-            dtpStartTime.ValueChanged += (s, e) => Fire(ScheduleChanged);
-            dtpEndTime.ValueChanged   += (s, e) => Fire(ScheduleChanged);
-
-            chkBatteryMonitor.CheckedChanged += (s, e) =>
+                Libs.LoadWebViewLoader(dataFolder);
+                web = new WebView2();
+                web.DefaultBackgroundColor = Bg;
+                web.Dock = DockStyle.Fill;
+                Controls.Add(web);
+                var env = await CoreWebView2Environment.CreateAsync(null, dataFolder, null);
+                await web.EnsureCoreWebView2Async(env);
+                if (web == null) return;   // closed while starting
+                var core = web.CoreWebView2;
+                core.Settings.AreDevToolsEnabled = false;
+                core.Settings.AreDefaultContextMenusEnabled = false;
+                core.Settings.IsStatusBarEnabled = false;
+                core.Settings.IsZoomControlEnabled = false;
+                core.Settings.AreBrowserAcceleratorKeysEnabled = false;
+                core.Settings.IsPasswordAutosaveEnabled = false;
+                core.Settings.IsGeneralAutofillEnabled = false;
+                core.AddWebResourceRequestedFilter(Host + "*", CoreWebView2WebResourceContext.All);
+                core.WebResourceRequested += (s, e) => Serve(env, e);
+                core.NavigationStarting += (s, e) => { if (!e.Uri.StartsWith(Host)) e.Cancel = true; };   // the page never leaves home
+                core.NewWindowRequested += (s, e) => e.Handled = true;
+                core.WebMessageReceived += (s, e) =>
+                {
+                    Dictionary<string, object> m;
+                    try { m = Json.Read<Dictionary<string, object>>(e.WebMessageAsJson); } catch { return; }
+                    if (m == null) return;
+                    object t;
+                    if (m.TryGetValue("t", out t) && (string)t == "ready") PageReady = true;
+                    if (Message != null) Message(m);
+                };
+                core.Navigate(Host + "index.html");
+            }
+            catch (Exception ex)
             {
-                SetBatteryControlsEnabled(chkBatteryMonitor.Checked);
-                Fire(BatterySettingsChanged);
-            };
-            nudHighThreshold.ValueChanged  += (s, e) => Fire(BatterySettingsChanged);
-            nudLowThreshold.ValueChanged   += (s, e) => Fire(BatterySettingsChanged);
-            nudHighMaxMinutes.ValueChanged  += (s, e) => Fire(BatterySettingsChanged);
+                Close_();
+                var answer = MessageBox.Show(
+                    L.T("La finestra delle impostazioni ha bisogno di Microsoft Edge WebView2, che di solito c'è già in Windows 10 e 11. Sentinel continua a lavorare nella tray.\n\nVuoi aprire la pagina per installarlo?\n\n(",
+                        "The settings window needs Microsoft Edge WebView2, which usually comes with Windows 10 and 11. Sentinel keeps working in the tray.\n\nOpen the page to install it?\n\n(") + ex.Message + ")",
+                    "Sentinel", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (answer == DialogResult.Yes)
+                    try { System.Diagnostics.Process.Start("explorer.exe", "https://developer.microsoft.com/microsoft-edge/webview2/"); } catch { }
+                Hide();
+            }
         }
 
-        private void Fire(EventHandler ev) { if (ev != null) ev(this, EventArgs.Empty); }
+        static readonly Dictionary<string, string> Types = new Dictionary<string, string> {
+            { ".html", "text/html; charset=utf-8" }, { ".css", "text/css; charset=utf-8" }, { ".js", "text/javascript; charset=utf-8" },
+            { ".woff2", "font/woff2" } };
 
-        // Portable version: no autostart (it would need the registry), a note where the checkbox was
-        public void ShowPortable()
+        static void Serve(CoreWebView2Environment env, CoreWebView2WebResourceRequestedEventArgs e)
         {
-            chkStartup.Visible = false;
-            var note = new Label();
-            note.AutoSize  = true;
-            note.ForeColor = SystemColors.GrayText;
-            note.Location  = new Point(22, 70);
-            note.Text      = L.T("Portable: impostazioni in Sentinel.ini", "Portable: settings in Sentinel.ini");
-            Controls.Add(note);
-            Text += " portable";
+            string path = new Uri(e.Request.Uri).AbsolutePath.TrimStart('/');
+            Stream s = Libs.Open("ui/" + path);
+            string type;
+            if (s == null || !Types.TryGetValue(Path.GetExtension(path), out type))
+            {
+                e.Response = env.CreateWebResourceResponse(null, 404, "Not Found", "");
+                return;
+            }
+            e.Response = env.CreateWebResourceResponse(s, 200, "OK", "Content-Type: " + type + "\r\nCache-Control: no-store");
         }
 
-        private void SetBatteryControlsEnabled(bool on)
+        public void Post(object message)
         {
-            nudHighThreshold.Enabled  = on;
-            nudLowThreshold.Enabled   = on;
-            nudHighMaxMinutes.Enabled = on;
+            if (web == null || web.CoreWebView2 == null || !PageReady) return;
+            try { web.CoreWebView2.PostWebMessageAsJson(Json.Write(message)); } catch { }
         }
 
-        private void InitializeComponent()
+        void Close_()
         {
-            this.chkActive         = new CheckBox();
-            this.chkStartup        = new CheckBox();
-            this.lblTitle          = new Label();
-            this.btnClose          = new Button();
-
-            this.grpSchedule        = new GroupBox();
-            this.chkScheduleEnabled = new CheckBox();
-            this.dtpStartTime       = new DateTimePicker();
-            this.dtpEndTime         = new DateTimePicker();
-            this.lblStart           = new Label();
-            this.lblEnd             = new Label();
-
-            this.grpBattery        = new GroupBox();
-            this.chkBatteryMonitor = new CheckBox();
-            this.nudHighThreshold  = new NumericUpDown();
-            this.nudLowThreshold   = new NumericUpDown();
-            this.nudHighMaxMinutes = new NumericUpDown();
-            this.lblHighThreshold  = new Label();
-            this.lblHighPct        = new Label();
-            this.lblLowThreshold   = new Label();
-            this.lblLowPct         = new Label();
-            this.lblHighMax        = new Label();
-            this.lblHighMaxMin     = new Label();
-
-            this.grpSchedule.SuspendLayout();
-            this.grpBattery.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)this.nudHighThreshold).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)this.nudLowThreshold).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)this.nudHighMaxMinutes).BeginInit();
-            this.SuspendLayout();
-
-            // lblTitle
-            this.lblTitle.AutoSize = true;
-            this.lblTitle.Font     = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point, 0);
-            this.lblTitle.Location = new Point(12, 9);
-            this.lblTitle.Text     = L.T("Impostazioni", "Settings");
-
-            // chkActive
-            this.chkActive.AutoSize = true;
-            this.chkActive.Font     = new Font("Segoe UI", 10F);
-            this.chkActive.Location = new Point(20, 40);
-            this.chkActive.Text     = L.T("Attivo (niente standby)", "Active (no standby)");
-
-            // chkStartup
-            this.chkStartup.AutoSize = true;
-            this.chkStartup.Font     = new Font("Segoe UI", 10F);
-            this.chkStartup.Location = new Point(20, 68);
-            this.chkStartup.Text     = L.T("Avvia con Windows", "Start with Windows");
-
-            // grpSchedule
-            this.grpSchedule.Location = new Point(12, 100);
-            this.grpSchedule.Size     = new Size(276, 100);
-            this.grpSchedule.Text     = L.T("Pausa programmata", "Scheduled pause");
-            this.grpSchedule.Controls.AddRange(new Control[] {
-                this.chkScheduleEnabled,
-                this.lblStart, this.dtpStartTime,
-                this.lblEnd,   this.dtpEndTime
-            });
-
-            this.chkScheduleEnabled.AutoSize = true;
-            this.chkScheduleEnabled.Location = new Point(10, 20);
-            this.chkScheduleEnabled.Text     = L.T("Abilita (pausa pranzo)", "Enable (lunch break)");
-
-            this.lblStart.AutoSize = true;
-            this.lblStart.Location = new Point(7, 50);
-            this.lblStart.Text     = L.T("Inizio:", "From:");
-
-            this.dtpStartTime.Format     = DateTimePickerFormat.Time;
-            this.dtpStartTime.ShowUpDown = true;
-            this.dtpStartTime.Location   = new Point(55, 47);
-            this.dtpStartTime.Size       = new Size(70, 20);
-
-            this.lblEnd.AutoSize = true;
-            this.lblEnd.Location = new Point(7, 75);
-            this.lblEnd.Text     = L.T("Fine:", "To:");
-
-            this.dtpEndTime.Format     = DateTimePickerFormat.Time;
-            this.dtpEndTime.ShowUpDown = true;
-            this.dtpEndTime.Location   = new Point(55, 72);
-            this.dtpEndTime.Size       = new Size(70, 20);
-
-            // grpBattery
-            this.grpBattery.Location = new Point(12, 212);
-            this.grpBattery.Size     = new Size(276, 145);
-            this.grpBattery.Text     = L.T("Batteria", "Battery");
-            this.grpBattery.Controls.AddRange(new Control[] {
-                this.chkBatteryMonitor,
-                this.lblHighThreshold, this.nudHighThreshold, this.lblHighPct,
-                this.lblLowThreshold,  this.nudLowThreshold,  this.lblLowPct,
-                this.lblHighMax,       this.nudHighMaxMinutes, this.lblHighMaxMin
-            });
-
-            // chkBatteryMonitor
-            this.chkBatteryMonitor.AutoSize = true;
-            this.chkBatteryMonitor.Font     = new Font("Segoe UI", 9.5F, FontStyle.Bold);
-            this.chkBatteryMonitor.Location = new Point(10, 20);
-            this.chkBatteryMonitor.Text     = L.T("Avvisi batteria", "Battery alerts");
-
-            // Row 1 – High threshold
-            this.lblHighThreshold.AutoSize = true;
-            this.lblHighThreshold.Location = new Point(10, 50);
-            this.lblHighThreshold.Text     = L.T("Soglia alta (scollega):", "High (unplug) at:");
-
-            this.nudHighThreshold.Location = new Point(158, 47);
-            this.nudHighThreshold.Size     = new Size(52, 20);
-            this.nudHighThreshold.Minimum  = 1;
-            this.nudHighThreshold.Maximum  = 100;
-            this.nudHighThreshold.Value    = 97;
-
-            this.lblHighPct.AutoSize = true;
-            this.lblHighPct.Location = new Point(215, 50);
-            this.lblHighPct.Text     = "%";
-
-            // Row 2 – Low threshold
-            this.lblLowThreshold.AutoSize = true;
-            this.lblLowThreshold.Location = new Point(10, 80);
-            this.lblLowThreshold.Text     = L.T("Soglia bassa (attacca):", "Low (plug in) at:");
-
-            this.nudLowThreshold.Location = new Point(158, 77);
-            this.nudLowThreshold.Size     = new Size(52, 20);
-            this.nudLowThreshold.Minimum  = 1;
-            this.nudLowThreshold.Maximum  = 100;
-            this.nudLowThreshold.Value    = 15;
-
-            this.lblLowPct.AutoSize = true;
-            this.lblLowPct.Location = new Point(215, 80);
-            this.lblLowPct.Text     = "%";
-
-            // Row 3 – High alert max duration
-            this.lblHighMax.AutoSize = true;
-            this.lblHighMax.Location = new Point(10, 110);
-            this.lblHighMax.Text     = L.T("Durata max avviso alta:", "High alert lasts max:");
-
-            this.nudHighMaxMinutes.Location = new Point(158, 107);
-            this.nudHighMaxMinutes.Size     = new Size(52, 20);
-            this.nudHighMaxMinutes.Minimum  = 1;
-            this.nudHighMaxMinutes.Maximum  = 60;
-            this.nudHighMaxMinutes.Value    = 5;
-
-            this.lblHighMaxMin.AutoSize = true;
-            this.lblHighMaxMin.Location = new Point(215, 110);
-            this.lblHighMaxMin.Text     = "min";
-
-            // btnClose
-            this.btnClose.Location = new Point(100, 370);
-            this.btnClose.Size     = new Size(80, 30);
-            this.btnClose.Text     = L.T("Chiudi", "Close");
-            this.btnClose.Click   += (s, e) => this.Hide();
-
-            // Form
-            this.ClientSize = new Size(304, 415);
-            this.Controls.AddRange(new Control[] {
-                this.lblTitle,
-                this.chkActive,
-                this.chkStartup,
-                this.grpSchedule,
-                this.grpBattery,
-                this.btnClose
-            });
-
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox     = false;
-            this.MinimizeBox     = true;
-            this.ShowInTaskbar   = true;
-            this.StartPosition   = FormStartPosition.CenterScreen;
-
-            this.Text = "Sentinel " + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            this.Icon = L.AppIcon("Sentinel.ico", new Size(32, 32));
-
-            ((System.ComponentModel.ISupportInitialize)this.nudHighThreshold).EndInit();
-            ((System.ComponentModel.ISupportInitialize)this.nudLowThreshold).EndInit();
-            ((System.ComponentModel.ISupportInitialize)this.nudHighMaxMinutes).EndInit();
-            this.grpSchedule.ResumeLayout(false);
-            this.grpBattery.ResumeLayout(false);
-            this.ResumeLayout(false);
-            this.PerformLayout();
+            PageReady = false;
+            if (web == null) return;
+            Controls.Remove(web);
+            web.Dispose();
+            web = null;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; this.Hide(); }
+            if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); }   // closing the window keeps Sentinel in the tray
             base.OnFormClosing(e);
         }
     }
